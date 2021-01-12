@@ -1,3 +1,4 @@
+#remotes::install_github("joachim-gassen/tidycovid19")
 library(tidycovid19)
 library(tidyverse)
 library(ggrepel)
@@ -18,8 +19,16 @@ getData <- function(country, countryCode){
   df <- download_jhu_csse_covid19_data(cached = TRUE, silent = TRUE)
   dp <- download_google_cmr_data(cached = TRUE, silent = TRUE)
   
-  new_cases <- df[ which(df$country==country & df$date >= dateStart & df$date < dateEnd), ]
-  mobility <- dp[ which(dp$date >= dateStart & dp$date < dateEnd & dp$iso3c == countryCode), ]
+  data <- na.omit(merge(df, dp, by = c("iso3c", "date")))
+  
+  mobility <- data[ which(data$date >= dateStart & data$date < dateEnd), ]
+  
+  mobility$confirmed = c(0, diff(mobility$confirmed, lag = 1))
+  for (i in nrow(mobility)) {
+    if (i > 0 && mobility[i,]$iso3c != mobility[i-1,]$iso3c) {
+      mobility[i,]$confirmed = 0;
+    }
+  }
   
   retail_recreation = mobility$retail_recreation
   grocery_pharmacy = mobility$grocery_pharmacy 
@@ -27,7 +36,7 @@ getData <- function(country, countryCode){
   transit_stations = mobility$transit_stations 
   workplaces = mobility$workplaces 
   residential = mobility$residential 
-  confirmed = new_cases$confirmed
+  confirmed = mobility$confirmed
   
   data <- data.frame(retail_recreation, 
                      grocery_pharmacy, 
@@ -36,76 +45,49 @@ getData <- function(country, countryCode){
                      workplaces, 
                      residential, 
                      confirmed)
+  
   write.csv(data, paste('alldata_', country, '.csv', sep=""))
   return(data)
 }
 
+globTree <- NULL
 getParams <- function(trainSet){
-  # best mtry param
+  
+  customRF <- list(type = "Regression", library = "randomForest", loop = NULL)
+  customRF$parameters <- data.frame(parameter = c("mtry", "ntree", "maxnodes"), class = rep("numeric", 3), label = c("mtry", "ntree", "maxnodes"))
+  customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+  customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+    randomForest(x, y, mtry = param$mtry, ntree=param$ntree, maxnodes=param$maxnodes, ...)
+  }
+  customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL) {
+    predict(modelFit, newdata)
+  }
+  customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL) {
+    predict(modelFit, newdata, type = "prob")
+  }
+  customRF$sort <- function(x) x[order(x[,1]),]
+  customRF$levels <- function(x) x$classes
+  
   trControl <- trainControl(method = "cv",
-                            number = 10,
-                            search = "grid")
-  tuneGrid <- expand.grid(.mtry = c(1: 5))
-  rf_mtry <- train(confirmed ~ . -X,
-                   data = trainSet,
-                   method = "rf",
-                   metric = "RMSE",
-                   tuneGrid = tuneGrid,
-                   trControl = trControl,
-                   importance = TRUE,
-                   nodesize = 5,
-                   ntree = 300)
-  best_mtry <- rf_mtry$bestTune$mtry
-
-  # best maxnodes param
-  store_maxnode <- list()
-  tuneGrid <- expand.grid(.mtry = best_mtry)
-  for (maxnodes in c(20: 30)) {
-    set.seed(1234)
-    rf_maxnode <- train(confirmed~.-X,
-                        data = trainSet,
-                        method = "rf",
-                        metric = "RMSE",
-                        tuneGrid = tuneGrid,
-                        trControl = trControl,
-                        importance = TRUE,
-                        nodesize = 5,
-                        maxnodes = maxnodes,
-                        ntree = 300)
-    key <- toString(maxnodes)
-    store_maxnode[[key]] <- rf_maxnode
-  }
-  results_node <- resamples(store_maxnode)
-  #print(summary(results_node))
-  res <- summary(results_node)
-  tmp <- as.data.frame(res[["statistics"]][["Rsquared"]])
-  best_maxnodes <- as.numeric(rownames(tmp[match(max(tmp$Max.),tmp$Max.),]))
-
-  # best ntree param
-  store_maxtrees <- list()
-  for (ntree in c(250, 300, 350, 400, 450, 500, 550, 600, 800, 1000, 2000)) {
-    rf_maxtrees <- train(confirmed~.-X,
-                         data = trainSet,
-                         method = "rf",
-                         metric = "RMSE",
-                         tuneGrid = tuneGrid,
-                         trControl = trControl,
-                         importance = TRUE,
-                         nodesize = 5,
-                         maxnodes = best_maxnodes,
-                         ntree = ntree)
-    key <- toString(ntree)
-    store_maxtrees[[key]] <- rf_maxtrees
-  }
-  results_tree <- resamples(store_maxtrees)
-  #print(summary(results_tree))
-  res <- summary(results_tree)
-  tmp <- as.data.frame(res[["statistics"]][["Rsquared"]])
-  best_ntree <- as.numeric(rownames(tmp[match(max(tmp$Max.),tmp$Max.),]))
+                            number = 2,
+                            search = "grid",
+                            verboseIter = TRUE)
   
+  tuneGrid <- expand.grid(.mtry=c(1:6),
+                          .maxnodes=c(seq(30,70,5)),
+                          .ntree=c(seq(200, 1000, 100)))
   
-  returnList <- list("mtry" = best_mtry, "grid" = tuneGrid, "control" = trControl, "maxnodes" = best_maxnodes, "ntree" = best_ntree)
-  return(returnList)
+  tree <- train(confirmed ~ .,
+                data = trainSet,
+                method = customRF,
+                metric = "RMSE",
+                tuneGrid = tuneGrid,
+                trControl = trControl,
+                importance = TRUE,
+                nodesize = 5
+  )
+  globTree <<- tree
+  return(tree)
 }
 
 getModel <- function(tuneGrid, trControl, trainSet, best_maxnodes, best_ntree){
@@ -135,7 +117,7 @@ getAnaliza <- function(testSet, prediction){
 }
 
 # input params
-country <- "Croatia"
+country <- "all"
 countryCode <- "HRV"
 
 # load data
@@ -147,25 +129,19 @@ if(isTRUE(file.exists(filename))){
 }
 
 # train and test (80-20)
-train <- sample(nrow(data), 0.8*nrow(data), replace = FALSE)
+train <- sample(nrow(data), 0.1*nrow(data), replace = FALSE)
 trainSet <- data[train,]
-testSet <- data[-train,]
+
+filename <- paste('alldata_', 'Croatia', '.csv', sep="")
+testSet <- as.data.frame(read.csv(filename, header = TRUE, sep = ','))
 
 # train model
 filename <- paste('rf_', country, '.rds', sep="")
 if(isTRUE(file.exists(filename))){
   trained_rf <- readRDS(filename)
 }else{
-  # best mtry, maxnodes and ntree
-  params <- getParams(trainSet)
-  best_mtry <- params$mtry
-  tuneGrid <- params$grid
-  trControl <- params$control
-  best_maxnodes <- params$maxnodes
-  best_ntree <- params$ntree
-  
-  # train
-  trained_rf <- getModel(tuneGrid, trControl, trainSet, best_maxnodes, best_ntree)
+  trained_rf <- getParams(trainSet)
+  saveRDS(trained_rf, paste('rf_', country, '.rds', sep=""))
 }
 
 # predict

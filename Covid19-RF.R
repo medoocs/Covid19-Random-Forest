@@ -91,7 +91,7 @@ getParams <- function(trainSet){
   customRF$levels <- function(x) x$classes
   
   trControl <- trainControl(method = "cv",
-                            number = 2,
+                            number = 4,
                             search = "grid")
   #                         ,verboseIter = TRUE)
   

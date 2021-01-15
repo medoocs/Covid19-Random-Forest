@@ -11,6 +11,7 @@ library(dplyr)
 library(smoother)
 
 dateStart <- "2020-02-15"
+#dateEnd <- "2020-11-06"
 dateEnd <- "2021-01-06"
 
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))

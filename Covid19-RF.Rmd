@@ -16,7 +16,7 @@ div.col-md-12 .pull-right {
   float: left !important
 }
 
-h1 {
+body, h1 {
   font-family: "Helvetica"
 }
 ```
@@ -83,7 +83,7 @@ dateEnd <- reactive({input$dateRange[[2]]})
 </div>
 </div>
 ```{r, echo=FALSE}
-checkboxInput("retrainFlag", "Ponovno učenje")
+checkboxInput("retrainFlag", "Ponovno u\u010Denje")
 retrainFlag <- reactive({input$retrainFlag})
 ```
 

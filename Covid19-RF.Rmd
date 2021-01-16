@@ -1,56 +1,102 @@
 ---
-title: "Covid19-RF"
+title: "Model dnevnog broja Covid-19 novozaraženih osoba u ovisnosti o smanjenju pojedinačne mobilnost"
 author: "Renco Grabar, Nikola Medved, Matija Dizdar"
 date: "1/15/2021"
-output: html_document
+output:
+  html_document:
+    code_folding: hide
+    theme: yeti
 ---
+
+```{css, echo=FALSE}
+/* https://stackoverflow.com/questions/64076708/how-to-change-position-of-code-folding-buttons-in-rmarkdown */
+/* Move code folding buttons to the left */
+div.col-md-12 .pull-right {
+  float: left !important
+}
+
+h1 {
+  font-family: "Helvetica"
+}
+```
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 
-options(warn=-1) #kekw
+#options(warn=-1) #kekw
 
-#remotes::install_github("joachim-gassen/tidycovid19")
+if (!("tidycovid19" %in% rownames(installed.packages()))) {
+  require(remotes)
+  remotes::install_github("joachim-gassen/tidycovid19")
+}
 library(tidycovid19)
-library(tidyverse)
-library(parallel)
-library(doParallel)
-library(caret)
-library(ggplot2)
-library(dplyr)
-library(smoother)
+require("tidyverse")
+require("parallel")
+require("doParallel")
+require("caret")
+require("ggplot2")
+require("dplyr")
+require("smoother")
 ```
-
-## Tema
-Model dnevnog broja Covid-19 novozaraženih osoba u ovisnosti o smanjenju pojedinačne mobilnost
 
 ## Zadatak
 Zadani su (analizirati podatke do 6. studenog 2020.): (i) vremenski niz dnevnih brojeva novozaraženih osoba (Johns Hopkins University) te (ii) Google podatci o smanjenju pojedinačne mobilnosti po kategorijama (pristup pomoću R knjižnice tidycovid19). Izvorni skup podataka razdijeliti po Paretovom (80-20) načelu. U programskom okruženju R razviti model slučajne šume koji će prognozirati dnevni broj u ovisnosti o pojedinačnoj mobilnosti prema kategorijama (residential, workplaces, ...). Provjeriti uspješnost modela P-O dijagramom i statističkom analizom reziduala. Rezultat projekta: završni izvještaj, R skripta
 
 ## Inicijalizacija
 
-TODO: opisati ova govna
+Odabir početnog i krajnjeg datuma, te ISO koda koji predstavlja državu čije podatke
+ćemo obraditi. U ovom slučaju izabrali smo koristiti podatke od 15.02.2020. do
+06.01.2021. (umjesto do 06.11.2020.) kako bi dobili više podataka za učenje modela.
+
+Država na kojoj radimo u ovom slučaju je Hrvatska, no isti kod radit će i za bilo
+koju drugu državu, ili pak cijeli svijet uz country code `"ALL"`.
+
+<i>Napomena: Učenje na podacima cijelog svijeta može potrajati.</i>
 
 ```{r init, echo=TRUE}
 dateStart <- "2020-02-15"
 #dateEnd <- "2020-11-06"
 dateEnd <- "2021-01-06" # stavili smo do prvog mjeseca da bi dobili vise podataka
-
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+tryCatch({
+  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+}, error = function(e) {
+  knitr::opts_knit$set(root.dir = dirname(rstudioapi::getActiveDocumentContext()$path))
+})
 set.seed(1234)
 
-countryCode <- "IND"
+countryCode <- "USA"
 ```
 
-# Tabovi {.tabset}
+# {.tabset}
 
-## Ucitavanje podataka
+## Učitavanje podataka
 
-TODO: opisati ova govna
+Koristeći tidycovid19 i tidyverse pakete dohvaćamo podatke iz tri različita repozitorija:
+
+* <a href="https://github.com/CSSEGISandData/COVID-19">Johns Hopkins University CSSE Github Repo</a> - za broj ukupnih slučajeva, svake države između datuma koje smo ranije odredili
+* <a href="https://www.google.com/covid19/mobility/">Google COVID-19 Community Mobility Reports</a> - za postotak promjene mobilnosti u odnosu na mobilnosti zabilježene u periodu 03.01. - 06.02.2020. po državama
+* <a href="https://data.worldbank.org/">World Bank</a> - za ukupne populacije i gustoće naseljenosti po državama; to koristimo za normalizaciju podataka.
+
+Nakon što preuzmemo podatke spremamo ih na disk u CSV formatu. Tako izbjegavamo
+ponovno preuzimanje podataka prilikom opetovanog pokretanja programa.
+
+Budući da želimo izmjeriti dnevni broj novih slučajeva, prije svega obradili smo
+podatke dobivene iz JHU CSSE repozitorija tako da smo oduzeli svaki dan s prethodnim.
+To zvuči trivijalno, ali kako postoje rupe u podacima neki dani imali bi nakupljene
+promjene kroz neki period, npr. za podatke Afganistana fale podaci između 18.05. do
+03.07.2020. Zbog toga na prijelazu između ta dva datuma dolazi do drastičnog
+povećanja novozaraženih. Odlučili smo to riješiti tako da izbrišemo podatke toga dana.
+
+Svaka država testiranja (ne) provodi na određene dane, te se zbog toga na grafu
+novozaraženih mogu vidjeti oscilacije, npr. u Hrvatskoj možemo primijetiti
+neobjašnjivo mali broj novozaraženih ponedjeljkom i utorkom. Mjere se u tako kratkim
+periodima ne mijenjaju značajno, što znači da model može krivo naučiti što znače 
+određene mjere (odnosno mobilnosti). Kako bi izbjegli taj problem koristili smo
+Gaussovo zaglađivanje (engl. Gaussian smoothing) na podacima.
 
 ```{r data, echo=TRUE}
 processCountry <- function(data) {
-  data$confirmed = c(0, diff(data$confirmed, lag = 1)) #/ data$population
+  data$confirmed = c(0, diff(data$confirmed, lag = 1)) / data$population
   
   toDelete = c()
   for (i in 2:nrow(data)) {
@@ -62,8 +108,7 @@ processCountry <- function(data) {
     data = data[-toDelete,]
   }
   
-  #                                                      sta radi ovo lol
-  data$confirmed = smth.gaussian(data$confirmed)#, window=10, alpha=3, tail=TRUE)
+  #data$confirmed <- smth.gaussian(data$confirmed)
   return(na.omit(data))
 }
 
@@ -81,7 +126,6 @@ fetchData <- function(countryCode) {
   if (countryCode == 'ALL') {
     data <- na.omit(merge(df, pop, by = c("iso3c")))
     data <- na.omit(merge(data, dp, by = c("iso3c", "date")))
-    data <- data[which(data$iso3c != 'HRV'), ]
   } else {
     pop_country <- pop [which(pop$iso3c == countryCode), ]
     df_country <- df[ which(df$iso3c == countryCode), ]
@@ -107,8 +151,8 @@ getData <- function(countryCode) {
   mobility <- ungroup(grouped)
   
   data <- mobility[, c("retail_recreation", "grocery_pharmacy", "parks", 
-                       "transit_stations", "workplaces", "residential", 
-                       "confirmed")]
+                       "transit_stations", "workplaces", "residential",
+                       "pop_density", "confirmed")]
   
   return(data)
 }
@@ -117,14 +161,35 @@ data <- getData(countryCode)
 summary(data)
 ```
 
-## Treniranje
+## Učenje modela
 
-TODO: opisati ova govna
+Napravili smo model slučajne šume (engl. random forest), što je kolekcija stabala
+odluke (engl. decision tree) koji se individualno uče na podacima, te demokratski odlučuju vrijednost
+rezultata za određene ulazne podatke. U strojnom učenju modeli se dijele na 
+klasifikacijske i regresijske ovisno o obliku varijable koju pokušavamo predvidjeti.
+U našem slučaju, radi se o regresijskom modelu, te smo kao takvom odlučili koristiti
+Root Mean Squared Error (RMSE) kao metriku za biranje optimalnog modela. Taj i 
+ostale hiperparametre izabrali smo trial-and-error metodom, odnosno nasumičnim
+biranjem hiperparametera dok nismo dobili zadovoljavajuće rezultate.
+
+Ostali hiperparametri su:
+
+* broj stabala u šumi (u kodu `ntree`)
+* maksimalan broj čvorova u stablu (`maxnodes`)
+* najmanja veličina listova u stablu (`nodesize`)
+* broj parametara na kojima ćemo probati napraviti split u stablima (`mtry`)
+
+`mtry` je jedini hiperparametar koji nismo htjeli staviti na fiksnu vrijednost 
+(uglavnom jer su nam ljudi na internetu rekli da ostale hiperparametre ne treba
+podešavati) već koristimo pretraživanje po rešetci (engl. grid search) i 5-struku 
+unakrsnu provjeru (engl. cross-validation) za pronalaženje optimalne vrijednosti.
+
+Lako je primijetiti da je učenje 100 stabala 5 puta skup posao, stoga smo 
+koristili paralelizaciju za ubrzanje cijelog procesa.
 
 ```{r, echo=TRUE}
 getParams <- function(trainSet) {
-  trControl <- trainControl(method = "repeatedcv",
-                            repeats = 1,
+  trControl <- trainControl(method = "cv",
                             number = 5,
                             search = "grid",
                             verboseIter = TRUE,
@@ -132,7 +197,7 @@ getParams <- function(trainSet) {
   
   tuneGrid <- expand.grid(.mtry=c(1:ncol(trainSet)))
   
-  registerDoParallel(cores=10)
+  registerDoParallel(cores=4)
   
   tree <- train(confirmed ~ .,
                 data = trainSet,
@@ -150,7 +215,16 @@ getParams <- function(trainSet) {
   
   return(tree)
 }
+```
 
+Nakon obrade podatke dijelimo na podatke za učenje i podatke za testiranje
+po Paretovom (80-20) načelu, odnosno 80% nasumično odabranih podataka koristi se
+za učenje, a ostalih 20% za testiranje.
+
+Nakon što naučimo model spremamo ga na disk u RDS formatu. Tako izbjegavamo
+ponovno učenje modela prilikom opetovanog pokretanja programa.
+
+```{r, echo=TRUE}
 # train and test (80-20)
 train <- sample(nrow(data), 0.8*nrow(data), replace = FALSE)
 trainSet <- data[train,]
@@ -169,10 +243,26 @@ summary(trained_rf)
 
 ## Analiza
 
-TODO: opisati ova govna
+Kako bi vizualno prikazali učinak modela radimo linijski dijagram koji uspoređuje
+stvarne i predviđene vrijednost novozaraženih za određene mjere. Mjere nisu prikazane
+u dijagramu, već se x-os odnosi na indekse dana u testnom setu. Za neke države 
+postoje dani u kojima su mjere identične ali je broj novozaraženih drastično
+drugačiji. To se događa jer broj novozaraženih ne ovisi isključivo o postavljenim
+mjerama (odnosno mobilnosti) već i o drugim okolišnim čimbenicima, npr. temperatura zraka, 
+ukupan broj aktivnih slučajeva i sl. Zbog toga model takve dane ne može naučiti
+ispravno, te se na grafu manifestira kao nagli porasti ili nagli padovi.
+
+P-O dijagram je dijagram koji na x-osi ima predviđene vrijednosti, a na y-osi stvarne vrijednosti.
+Optimalan bi model prema tome sve točke na takvom dijagramu stavio na `y=x` pravac.
+Svako odstupanje od toga ukazuje na grešku. 
+
+Performanse našeg modela variraju od loših (Australija) do neobično izvrsnih (Indija).
+
+<i>Napomena: vrijednosti na y-osi predstavljaju broj novozaraženih / ukupan broj stanovnika</i>
 
 ```{r, echo = TRUE}
 getAnaliza <- function(testSet, prediction) {
+  #prediction = smth.gaussian(prediction, window = 7, alpha = 4, tails = TRUE)
   # plot real vs pred
   plot(testSet$confirmed, type="l", lwd=3, col="blue", xlab = "Date", ylab = "Daily new cases", main = "Actual vs Predicted")
   #lines(testSet$confirmed, col="blue")
@@ -183,7 +273,20 @@ getAnaliza <- function(testSet, prediction) {
 }
 prediction <- predict(trained_rf, testSet)
 getAnaliza(testSet, prediction)
+```
 
+Iz donjeg ispisa možemo očitati koje mobilnosti su imale najviše utjecaja na 
+broj novozaraženih.
+
+U slučaju Hrvatske najznačajnije mobilnosti bile su trgovine, ljekarne, trgovački
+centri, teretane i sl. (u ispisu `retail_recreation` i `grocery_pharmacy`,
+označeni s tri zvjezdice), dok kretanje između stambenih prostora nije imalo
+značajan utjecaj (u ispisu `residential`, neoznačeno). Ostale mobilnosti imale
+su mali značaj.
+
+<i>Napomena: `pop_density` nema značaja jer je konstantan za jednu državu. Da smo 
+učili i testirali na više država (npr. na podacima cijelog svijeta) bilo bi
+od većeg značaja.</i>
+```{r, echo = TRUE}
 reziduali <- glm(confirmed ~ ., data = testSet)
 summary(reziduali)
-```

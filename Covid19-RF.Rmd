@@ -21,22 +21,20 @@ h1 {
 ```
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+options(warn=-1) #kekw
 
-#options(warn=-1) #kekw
+for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother")) {
+  if (!(p %in% rownames(installed.packages()))) {
+    install.packages(p)
+  }
+  library(p, character.only=TRUE)
+}
 
 if (!("tidycovid19" %in% rownames(installed.packages()))) {
-  require(remotes)
+  library(remotes)
   remotes::install_github("joachim-gassen/tidycovid19")
 }
 library(tidycovid19)
-require("tidyverse")
-require("parallel")
-require("doParallel")
-require("caret")
-require("ggplot2")
-require("dplyr")
-require("smoother")
 ```
 
 ## Zadatak
@@ -57,6 +55,7 @@ koju drugu državu, ili pak cijeli svijet uz country code `"ALL"`.
 dateStart <- "2020-02-15"
 #dateEnd <- "2020-11-06"
 dateEnd <- "2021-01-06" # stavili smo do prvog mjeseca da bi dobili vise podataka
+
 tryCatch({
   setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 }, error = function(e) {
@@ -64,7 +63,7 @@ tryCatch({
 })
 set.seed(1234)
 
-countryCode <- "USA"
+countryCode <- "HRV"
 ```
 
 # {.tabset}
@@ -108,7 +107,7 @@ processCountry <- function(data) {
     data = data[-toDelete,]
   }
   
-  #data$confirmed <- smth.gaussian(data$confirmed)
+  data$confirmed = smth.gaussian(data$confirmed)
   return(na.omit(data))
 }
 
@@ -197,7 +196,7 @@ getParams <- function(trainSet) {
   
   tuneGrid <- expand.grid(.mtry=c(1:ncol(trainSet)))
   
-  registerDoParallel(cores=4)
+  registerDoParallel(cores=detectCores()-2)
   
   tree <- train(confirmed ~ .,
                 data = trainSet,
@@ -262,7 +261,6 @@ Performanse našeg modela variraju od loših (Australija) do neobično izvrsnih 
 
 ```{r, echo = TRUE}
 getAnaliza <- function(testSet, prediction) {
-  #prediction = smth.gaussian(prediction, window = 7, alpha = 4, tails = TRUE)
   # plot real vs pred
   plot(testSet$confirmed, type="l", lwd=3, col="blue", xlab = "Date", ylab = "Daily new cases", main = "Actual vs Predicted")
   #lines(testSet$confirmed, col="blue")
@@ -290,3 +288,4 @@ od većeg značaja.</i>
 ```{r, echo = TRUE}
 reziduali <- glm(confirmed ~ ., data = testSet)
 summary(reziduali)
+```

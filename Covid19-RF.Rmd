@@ -6,6 +6,7 @@ output:
   html_document:
     code_folding: hide
     theme: yeti
+runtime: shiny
 ---
 
 ```{css, echo=FALSE}
@@ -23,7 +24,7 @@ h1 {
 ```{r setup, include=FALSE}
 options(warn=-1) #kekw
 
-for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother")) {
+for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother", "countrycode")) {
   if (!(p %in% rownames(installed.packages()))) {
     install.packages(p)
   }
@@ -51,19 +52,39 @@ koju drugu državu, ili pak cijeli svijet uz country code `"ALL"`.
 
 <i>Napomena: Učenje na podacima cijelog svijeta može potrajati.</i>
 
-```{r init, echo=TRUE}
-dateStart <- "2020-02-15"
-#dateEnd <- "2020-11-06"
-dateEnd <- "2021-01-06" # stavili smo do prvog mjeseca da bi dobili vise podataka
+<div style="display:inline-flex">
+<div style="padding: 10px">
+```{r, echo=FALSE}
+countries <- codelist$iso3c
+names(countries) <- codelist$country.name.en
 
-tryCatch({
-  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-}, error = function(e) {
-  knitr::opts_knit$set(root.dir = dirname(rstudioapi::getActiveDocumentContext()$path))
-})
-set.seed(1234)
+countries <- Filter(Negate(is.na), countries)
+countries <- countries[sort(names(countries))]
+countries <- append(c("Global Data" = "ALL"), countries)
 
-countryCode <- "HRV"
+selectInput("countryCode", "Izbor države",
+            choices=countries,
+            selected="HRV")
+
+countryCode <- reactive({input$countryCode})
+```
+</div>
+<div style="padding: 10px">
+```{r init, echo=FALSE}
+dateRangeInput('dateRange',
+  label = 'Izbor datuma: dd.mm.yyyy.',
+  format = 'dd.mm.yyyy.',
+  start = as.Date("2020-02-15"), end = as.Date("2020-11-06")
+)
+
+dateStart <- reactive({input$dateRange[[1]]})
+dateEnd <- reactive({input$dateRange[[2]]})
+```
+</div>
+</div>
+```{r, echo=FALSE}
+checkboxInput("retrainFlag", "Ponovno učenje")
+retrainFlag <- reactive({input$retrainFlag})
 ```
 
 # {.tabset}
@@ -95,7 +116,10 @@ Gaussovo zaglađivanje (engl. Gaussian smoothing) na podacima.
 
 ```{r data, echo=TRUE}
 processCountry <- function(data) {
-  data$confirmed = c(0, diff(data$confirmed, lag = 1)) / data$population
+  data$confirmed = c(0, diff(data$confirmed, lag = 1))
+  if (countryCode() == "ALL") {
+   data$confirmed <- data$confirmed / data$population
+  }
   
   toDelete = c()
   for (i in 2:nrow(data)) {
@@ -141,9 +165,7 @@ fetchData <- function(countryCode) {
 getData <- function(countryCode) {
   data <- fetchData(countryCode)
   
-  #population <<- data$population[1]
-  
-  mobility <- data[ which(data$date >= dateStart & data$date < dateEnd), ]
+  mobility <- data[ which(data$date >= dateStart() & data$date < dateEnd()), ]
   
   grouped <- group_by(mobility, iso3c)
   grouped <- do(grouped, processCountry(.))
@@ -156,8 +178,11 @@ getData <- function(countryCode) {
   return(data)
 }
 
-data <- getData(countryCode)
-summary(data)
+data <- reactive({ getData(countryCode()) })
+
+renderPrint({
+  summary(data())
+})
 ```
 
 ## Učenje modela
@@ -187,18 +212,22 @@ Lako je primijetiti da je učenje 100 stabala 5 puta skup posao, stoga smo
 koristili paralelizaciju za ubrzanje cijelog procesa.
 
 ```{r, echo=TRUE}
-getParams <- function(trainSet) {
+getParams <- function(trainSet, filename) {
+  if (!retrainFlag() && isTRUE(file.exists(filename))) {
+    return(readRDS(filename))
+  }
+  
   trControl <- trainControl(method = "cv",
                             number = 5,
                             search = "grid",
-                            verboseIter = TRUE,
+                            verboseIter = FALSE,
                             allowParallel = TRUE)
   
   tuneGrid <- expand.grid(.mtry=c(1:ncol(trainSet)))
   
   registerDoParallel(cores=detectCores()-2)
   
-  tree <- train(confirmed ~ .,
+  tree <- caret::train(confirmed ~ .,
                 data = trainSet,
                 method = "parRF",
                 metric = "RMSE",
@@ -207,10 +236,11 @@ getParams <- function(trainSet) {
                 tuneGrid = tuneGrid,
                 trControl = trControl,
                 importance = TRUE,
-                nodesize = 5
-  )
+                nodesize = 5)
   
   stopImplicitCluster()
+  
+  saveRDS(tree, filename)
   
   return(tree)
 }
@@ -224,20 +254,20 @@ Nakon što naučimo model spremamo ga na disk u RDS formatu. Tako izbjegavamo
 ponovno učenje modela prilikom opetovanog pokretanja programa.
 
 ```{r, echo=TRUE}
+set.seed(1234)
 # train and test (80-20)
-train <- sample(nrow(data), 0.8*nrow(data), replace = FALSE)
-trainSet <- data[train,]
-testSet <- data[-train,]
+train <- reactive({ sample(nrow(data()), 0.8*nrow(data()), replace = FALSE) })
+
+trainSet <- reactive({ data()[train(),] })
+testSet <- reactive({ data()[-train(),] })
 
 # train model
-filename <- paste('rf_', countryCode, '.rds', sep="")
-if(isTRUE(file.exists(filename))){
-  trained_rf <- readRDS(filename)
-}else{
-  trained_rf <- getParams(trainSet)
-  saveRDS(trained_rf, paste('rf_', countryCode, '.rds', sep=""))
-}
-summary(trained_rf)
+filename <- reactive({ paste('rf_', countryCode(), '.rds', sep="") })
+
+trained_rf <- reactive({ getParams(trainSet(), filename()) })
+renderPrint({
+  summary(trained_rf())
+})
 ```
 
 ## Analiza
@@ -259,18 +289,26 @@ Performanse našeg modela variraju od loših (Australija) do neobično izvrsnih 
 
 <i>Napomena: vrijednosti na y-osi predstavljaju broj novozaraženih / ukupan broj stanovnika</i>
 
-```{r, echo = TRUE}
-getAnaliza <- function(testSet, prediction) {
+```{r, echo = FALSE}
+plotLines <- function(testSet, prediction) {
   # plot real vs pred
-  plot(testSet$confirmed, type="l", lwd=3, col="blue", xlab = "Date", ylab = "Daily new cases", main = "Actual vs Predicted")
-  #lines(testSet$confirmed, col="blue")
-  lines(prediction, col="red", lwd=3)
-  legend("topleft", legend=c("actual (smooth)", "predicted"), col=c("blue", "red"), lty=1, cex=0.8)
+  plot(testSet$confirmed, type="l", lwd=3, col="#ff904c", xlab = "Index", ylab = "Daily new cases", main = paste("Actual vs Predicted (", countryCode(), ")", sep=""))
+  lines(prediction, col="#39a767", lwd=3)
+  lines(smth.gaussian(prediction, window=7, tails=TRUE, alpha=3.0), col="#6e4f7b", lwd=3)
+  legend("topleft", legend=c("actual (smooth)", "predicted", "predicted (smooth)"), col=c("#ff904c", "#39a767", "#6e4f7b"), lty=1, cex=0.8, lwd=3)
+}
+
+plotPO <- function(testSet, prediction) {
   # P-O dijagram
   ggplot() + geom_point(aes(prediction, testSet$confirmed)) + labs(x = "Prediction", y = "Daily new cases", title = "P-O dijagram")
 }
-prediction <- predict(trained_rf, testSet)
-getAnaliza(testSet, prediction)
+```
+
+```{r, echo = TRUE}
+prediction <- reactive({predict(trained_rf(), testSet())})
+
+renderPlot({ plotLines(testSet(), prediction()) })
+renderPlot({ plotPO(testSet(), prediction()) })
 ```
 
 Iz donjeg ispisa možemo očitati koje mobilnosti su imale najviše utjecaja na 
@@ -286,6 +324,8 @@ su mali značaj.
 učili i testirali na više država (npr. na podacima cijelog svijeta) bilo bi
 od većeg značaja.</i>
 ```{r, echo = TRUE}
-reziduali <- glm(confirmed ~ ., data = testSet)
-summary(reziduali)
+reziduali <- reactive({ glm(confirmed ~ ., data = testSet()) })
+renderPrint({
+  summary(reziduali())
+})
 ```

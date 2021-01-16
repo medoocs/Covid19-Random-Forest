@@ -1,24 +1,33 @@
 options(warn=-1) #kekw
 
-#remotes::install_github("joachim-gassen/tidycovid19")
+for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother")) {
+  if (!(p %in% rownames(installed.packages()))) {
+    install.packages(p)
+  }
+  library(p, character.only=TRUE)
+}
+
+if (!("tidycovid19" %in% rownames(installed.packages()))) {
+  library(remotes)
+  remotes::install_github("joachim-gassen/tidycovid19")
+}
 library(tidycovid19)
-library(tidyverse)
-library(parallel)
-library(doParallel)
-library(caret)
-library(ggplot2)
-library(dplyr)
-library(smoother)
 
 dateStart <- "2020-02-15"
 #dateEnd <- "2020-11-06"
-dateEnd <- "2021-01-06"
+dateEnd <- "2021-01-06" # stavili smo do prvog mjeseca da bi dobili vise podataka
 
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+tryCatch({
+  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+}, error = function(e) {
+  knitr::opts_knit$set(root.dir = dirname(rstudioapi::getActiveDocumentContext()$path))
+})
 set.seed(1234)
 
-differino <- function(data) {
-  data$confirmed = c(0, diff(data$confirmed, lag = 1)) #/ data$population
+countryCode <- "HRV"
+
+processCountry <- function(data) {
+  data$confirmed = c(0, diff(data$confirmed, lag = 1)) / data$population
   
   toDelete = c()
   for (i in 2:nrow(data)) {
@@ -30,8 +39,7 @@ differino <- function(data) {
     data = data[-toDelete,]
   }
   
-  #                                                      sta radi ovo lol
-  data$confirmed = smth.gaussian(data$confirmed)#, window=10, alpha=3, tail=TRUE)
+  data$confirmed = smth.gaussian(data$confirmed)
   return(na.omit(data))
 }
 
@@ -49,7 +57,6 @@ fetchData <- function(countryCode) {
   if (countryCode == 'ALL') {
     data <- na.omit(merge(df, pop, by = c("iso3c")))
     data <- na.omit(merge(data, dp, by = c("iso3c", "date")))
-    data <- data[which(data$iso3c != 'HRV'), ]
   } else {
     pop_country <- pop [which(pop$iso3c == countryCode), ]
     df_country <- df[ which(df$iso3c == countryCode), ]
@@ -71,19 +78,21 @@ getData <- function(countryCode) {
   mobility <- data[ which(data$date >= dateStart & data$date < dateEnd), ]
   
   grouped <- group_by(mobility, iso3c)
-  grouped = do(grouped, differino(.))
-  mobility = ungroup(grouped)
+  grouped <- do(grouped, processCountry(.))
+  mobility <- ungroup(grouped)
   
   data <- mobility[, c("retail_recreation", "grocery_pharmacy", "parks", 
-                       "transit_stations", "workplaces", "residential", 
-                       "confirmed")]
+                       "transit_stations", "workplaces", "residential",
+                       "pop_density", "confirmed")]
   
   return(data)
 }
 
+data <- getData(countryCode)
+summary(data)
+
 getParams <- function(trainSet) {
-  trControl <- trainControl(method = "repeatedcv",
-                            repeats = 1,
+  trControl <- trainControl(method = "cv",
                             number = 5,
                             search = "grid",
                             verboseIter = TRUE,
@@ -91,7 +100,7 @@ getParams <- function(trainSet) {
   
   tuneGrid <- expand.grid(.mtry=c(1:ncol(trainSet)))
   
-  registerDoParallel(cores=10)
+  registerDoParallel(cores=detectCores()-2)
   
   tree <- train(confirmed ~ .,
                 data = trainSet,
@@ -110,23 +119,6 @@ getParams <- function(trainSet) {
   return(tree)
 }
 
-getAnaliza <- function(testSet, prediction) {
-  # plot real vs pred
-  plot(testSet$confirmed, col="blue", xlab = "Date", ylab = "Daily new cases", main = "Actual vs Predicted")
-  lines(prediction, col="red")
-  # analiza reziduala
-  reziduali <- glm(confirmed ~ ., data = testSet)
-  print(summary(reziduali))
-  # P-O dijagram
-  ggplot() + geom_point(aes(prediction, testSet$confirmed)) + labs(x = "Prediction", y = "Daily new cases", title = "P-O dijagram")
-}
-
-# input params
-countryCode <- "AFG"
-
-# load data
-data <- getData(countryCode)
-
 # train and test (80-20)
 train <- sample(nrow(data), 0.8*nrow(data), replace = FALSE)
 trainSet <- data[train,]
@@ -140,9 +132,19 @@ if(isTRUE(file.exists(filename))){
   trained_rf <- getParams(trainSet)
   saveRDS(trained_rf, paste('rf_', countryCode, '.rds', sep=""))
 }
+summary(trained_rf)
 
-# predict
+getAnaliza <- function(testSet, prediction) {
+  # plot real vs pred
+  plot(testSet$confirmed, type="l", lwd=3, col="blue", xlab = "Date", ylab = "Daily new cases", main = "Actual vs Predicted")
+  #lines(testSet$confirmed, col="blue")
+  lines(prediction, col="red", lwd=3)
+  legend("topleft", legend=c("actual (smooth)", "predicted"), col=c("blue", "red"), lty=1, cex=0.8)
+  # P-O dijagram
+  ggplot() + geom_point(aes(prediction, testSet$confirmed)) + labs(x = "Prediction", y = "Daily new cases", title = "P-O dijagram")
+}
 prediction <- predict(trained_rf, testSet)
-
-# analiza
 getAnaliza(testSet, prediction)
+
+reziduali <- glm(confirmed ~ ., data = testSet)
+summary(reziduali)

@@ -4,6 +4,7 @@ author: "Renco Grabar, Nikola Medved, Matija Dizdar"
 date: "1/15/2021"
 output:
   html_document:
+    number_sections: true
     code_folding: hide
     theme: yeti
 runtime: shiny
@@ -16,7 +17,8 @@ div.col-md-12 .pull-right {
   float: left !important
 }
 
-body, h1 {
+
+body, h1, h2 {
   font-family: "Helvetica"
 }
 ```
@@ -24,7 +26,7 @@ body, h1 {
 ```{r setup, include=FALSE}
 options(warn=-1) #kekw
 
-for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother", "countrycode")) {
+for (p in c("remotes", "tidyverse", "parallel", "doParallel", "caret", "ggplot2", "dplyr", "smoother", "countrycode", "shiny")) {
   if (!(p %in% rownames(installed.packages()))) {
     install.packages(p)
   }
@@ -38,19 +40,23 @@ if (!("tidycovid19" %in% rownames(installed.packages()))) {
 library(tidycovid19)
 ```
 
-## Zadatak
-Zadani su (analizirati podatke do 6. studenog 2020.): (i) vremenski niz dnevnih brojeva novozaraženih osoba (Johns Hopkins University) te (ii) Google podatci o smanjenju pojedinačne mobilnosti po kategorijama (pristup pomoću R knjižnice tidycovid19). Izvorni skup podataka razdijeliti po Paretovom (80-20) načelu. U programskom okruženju R razviti model slučajne šume koji će prognozirati dnevni broj u ovisnosti o pojedinačnoj mobilnosti prema kategorijama (residential, workplaces, ...). Provjeriti uspješnost modela P-O dijagramom i statističkom analizom reziduala. Rezultat projekta: završni izvještaj, R skripta
+# Uvod
 
-## Inicijalizacija
+Cilj ovog rada bio je razviti model slučajne šume za prognoziranje dnevnog broja novozaraženih u ovisnosti o smanjenu pojedinačne mobilnosti po kategorijama. Izvorni skup podataka (mobilnosti, dnevni broj novozaraženih) razdijeljen je prema Paretovom 80-20 načelu. Podatci se koriste za učenje modela koji kao rezultat pruža procjenu dnevnog broja novozaraženih, uspješnost predviđanja prikazana je grafički (linijskim i P-O dijagramom) i statističkom analizom reziduala (utjecaj svake kategorije na dnevni broj novozaraženih).
 
-Odabir početnog i krajnjeg datuma, te ISO koda koji predstavlja državu čije podatke
+# Opis programa
+## Odabir parametara
+
+Odabir početnog i krajnjeg datuma, te države čije podatke
 ćemo obraditi. U ovom slučaju izabrali smo koristiti podatke od 15.02.2020. do
-06.01.2021. (umjesto do 06.11.2020.) kako bi dobili više podataka za učenje modela.
+06.11.2020. Moguće je odabrati drugačiji datum, uz to nudimo opciju ponovnog učenja modela. Ako ne ponovimo učenje, prikazat će se podatci iz novog vremenskog raspona
+ali dobiveni starim modelom. U suprotnome (ako ponovimo učenje) prikazat će se grafovi dobiveni modelom za novo vremensko razdoblje.
 
 Država na kojoj radimo u ovom slučaju je Hrvatska, no isti kod radit će i za bilo
-koju drugu državu, ili pak cijeli svijet uz country code `"ALL"`.
+koju drugu državu, ili pak cijeli svijet uz odabir `"Global Data"`.
 
 <i>Napomena: Učenje na podacima cijelog svijeta može potrajati.</i>
+<i>Napomena: Ako država nema podataka doći će do greške!</i>
 
 <div style="display:inline-flex">
 <div style="padding: 10px">
@@ -87,10 +93,10 @@ checkboxInput("retrainFlag", "Ponovno u\u010Denje")
 retrainFlag <- reactive({input$retrainFlag})
 ```
 
-# {.tabset}
+## Rezultati {.tabset}
 
-## Učitavanje podataka
 
+### Učitavanje podataka
 Koristeći tidycovid19 i tidyverse pakete dohvaćamo podatke iz tri različita repozitorija:
 
 * <a href="https://github.com/CSSEGISandData/COVID-19">Johns Hopkins University CSSE Github Repo</a> - za broj ukupnih slučajeva, svake države između datuma koje smo ranije odredili
@@ -185,7 +191,7 @@ renderPrint({
 })
 ```
 
-## Učenje modela
+### Učenje modela
 
 Napravili smo model slučajne šume (engl. random forest), što je kolekcija stabala
 odluke (engl. decision tree) koji se individualno uče na podacima, te demokratski odlučuju vrijednost
@@ -270,16 +276,16 @@ renderPrint({
 })
 ```
 
-## Analiza
+### Analiza
 
 Kako bi vizualno prikazali učinak modela radimo linijski dijagram koji uspoređuje
-stvarne i predviđene vrijednost novozaraženih za određene mjere. Mjere nisu prikazane
+stvarne (zaglađene), predviđene (zaglađene) i predviđene vrijednosti (bez zaglađivanja) novozaraženih za određene mjere. Mjere nisu prikazane
 u dijagramu, već se x-os odnosi na indekse dana u testnom setu. Za neke države 
 postoje dani u kojima su mjere identične ali je broj novozaraženih drastično
 drugačiji. To se događa jer broj novozaraženih ne ovisi isključivo o postavljenim
 mjerama (odnosno mobilnosti) već i o drugim okolišnim čimbenicima, npr. temperatura zraka, 
 ukupan broj aktivnih slučajeva i sl. Zbog toga model takve dane ne može naučiti
-ispravno, te se na grafu manifestira kao nagli porasti ili nagli padovi.
+ispravno, te se na grafu manifestira kao nagli porasti ili nagli padovi. Kako bi ih ublažili dodali smo treću liniju koja prikazuje zaglađene predviđene podatke. 
 
 P-O dijagram je dijagram koji na x-osi ima predviđene vrijednosti, a na y-osi stvarne vrijednosti.
 Optimalan bi model prema tome sve točke na takvom dijagramu stavio na `y=x` pravac.
@@ -287,7 +293,6 @@ Svako odstupanje od toga ukazuje na grešku.
 
 Performanse našeg modela variraju od loših (Australija) do neobično izvrsnih (Indija).
 
-<i>Napomena: vrijednosti na y-osi predstavljaju broj novozaraženih / ukupan broj stanovnika</i>
 
 ```{r, echo = FALSE}
 plotLines <- function(testSet, prediction) {
@@ -329,3 +334,18 @@ renderPrint({
   summary(reziduali())
 })
 ```
+
+# Zaključak
+
+Razvijeni model pokazao se uspješnim za veliku većinu država odnosno daje nam zadovoljavajuću sliku trenda porasta i smanjenja broja novozaraženih. Također omogućuje nam zanimljiv uvid u međusobnu ovisnost mobilnosti i broja novozaraženih. Ovakav alat koristan je za krojenje mjera koje bi se fokusirale na opuštanje ili na dodatne restrikcije u kategorijama mobilnosti koje su se pokazale nebitnima odnosno najkritičnijima za širenje virusa.
+
+# Literatura
+
+<a style = "float:left; clear:left" href= " https://machinelearningmastery.com/tune-machine-learning-algorithms-in-r/"> Tune machine learning algorithms in r </a>
+<a style = "float:left; clear:left" href= "https://www.guru99.com/r-random-forest-tutorial.html">R random forest tutorial </a>
+<a style = "float:left; clear:left" href= "https://www.rdocumentation.org/packages/caret/versions/4.47/">Caret </a>
+<a style = "float:left; clear:left" href= "https://joachim-gassen.github.io/2020/05/tidycovid19-new-data-and-doc/">Tidycovid19 new data and documentation </a>
+<a style = "float:left; clear:left" href= "https://shiny.rstudio.com/">Shiny documentation</a>
+<a style = "float:left; clear:left" href="https://github.com/CSSEGISandData/COVID-19">Johns Hopkins University CSSE Github Repo</a> 
+<a style = "float:left; clear:left" href="https://www.google.com/covid19/mobility/">Google COVID-19 Community Mobility Reports</a>
+<a style = "float:left; clear:left" href="https://data.worldbank.org/">World Bank</a> 

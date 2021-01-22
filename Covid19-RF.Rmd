@@ -1,6 +1,6 @@
 ---
-title: "Model dnevnog broja Covid-19 novozaraženih osoba u ovisnosti o smanjenju pojedinačne mobilnost"
-author: "Renco Grabar, Nikola Medved, Matija Dizdar"
+title: "Model dnevnog broja Covid-19 novozaraženih osoba u ovisnosti o smanjenju pojedinačne mobilnosti"
+author: "Renco Grabar, Nikola Medved, Matija Dizdar, DrDisrespect"
 date: "1/15/2021"
 output:
   html_document:
@@ -55,8 +55,10 @@ ali dobiveni starim modelom. U suprotnome (ako ponovimo učenje) prikazat će se
 Država na kojoj radimo u ovom slučaju je Hrvatska, no isti kod radit će i za bilo
 koju drugu državu, ili pak cijeli svijet uz odabir `"Global Data"`.
 
-<i>Napomena: Učenje na podacima cijelog svijeta može potrajati.</i>
-<i>Napomena: Ako država nema podataka doći će do greške!</i>
+<i>Napomene:
+
+ * Učenje na podacima cijelog svijeta može potrajati.
+ * Ako država nema podataka doći će do greške!</i>
 
 <div style="display:inline-flex">
 <div style="padding: 10px">
@@ -309,7 +311,7 @@ plotPO <- function(testSet, prediction) {
 }
 ```
 
-```{r, echo = TRUE}
+```{r, echo = FALSE}
 prediction <- reactive({predict(trained_rf(), testSet())})
 
 renderPlot({ plotLines(testSet(), prediction()) })
@@ -329,7 +331,7 @@ su mali značaj.
 učili i testirali na više država (npr. na podacima cijelog svijeta) bilo bi
 od većeg značaja.</i>
 ```{r, echo = TRUE}
-reziduali <- reactive({ glm(confirmed ~ ., data = testSet()) })
+reziduali <- reactive({ glm(confirmed ~ ., data = trainSet()) })
 renderPrint({
   summary(reziduali())
 })
@@ -337,7 +339,7 @@ renderPrint({
 
 # Zaključak
 
-Razvijeni model pokazao se uspješnim za veliku većinu država odnosno daje nam zadovoljavajuću sliku trenda porasta i smanjenja broja novozaraženih. Također omogućuje nam zanimljiv uvid u međusobnu ovisnost mobilnosti i broja novozaraženih. Ovakav alat koristan je za krojenje mjera koje bi se fokusirale na opuštanje ili na dodatne restrikcije u kategorijama mobilnosti koje su se pokazale nebitnima odnosno najkritičnijima za širenje virusa.
+Razvijeni model pokazao se uspješnim za veliku većinu država, odnosno daje nam zadovoljavajuću sliku trenda porasta i smanjenja broja novozaraženih. Također omogućuje nam zanimljiv uvid u međusobnu ovisnost mobilnosti i broja novozaraženih. Ovakav alat koristan je za krojenje mjera koje bi se fokusirale na opuštanje ili na dodatne restrikcije u kategorijama mobilnosti koje su se pokazale nebitnima odnosno najkritičnijima za širenje virusa.
 
 # Literatura
 
